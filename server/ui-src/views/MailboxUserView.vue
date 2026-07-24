@@ -82,11 +82,17 @@ export default {
 			const within = this.$route.query.q ? this.$route.query.q.trim() : "";
 			mailbox.mailboxSearch = within;
 
-			const scope = "username:" + (/\s/.test(this.username) ? `"${this.username}"` : this.username);
-			const q = within ? scope + " " + within : scope;
-			this.apiURI = this.resolve(`/api/v1/search`) + "?query=" + encodeURIComponent(q);
-			if (mailbox.timeZone !== "" && (within.indexOf("after:") !== -1 || within.indexOf("before:") !== -1)) {
-				this.apiURI += "&tz=" + encodeURIComponent(mailbox.timeZone);
+			// the `mailbox` parameter scopes the messages *and* the returned
+			// totals, unread count & tags to this mailbox only
+			const mb = "mailbox=" + encodeURIComponent(this.username);
+
+			if (within) {
+				this.apiURI = this.resolve(`/api/v1/search`) + "?" + mb + "&query=" + encodeURIComponent(within);
+				if (mailbox.timeZone !== "" && (within.indexOf("after:") !== -1 || within.indexOf("before:") !== -1)) {
+					this.apiURI += "&tz=" + encodeURIComponent(mailbox.timeZone);
+				}
+			} else {
+				this.apiURI = this.resolve(`/api/v1/messages`) + "?" + mb;
 			}
 
 			this.loadMailbox();

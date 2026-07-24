@@ -109,6 +109,82 @@ func TestUsernameSearch(t *testing.T) {
 	}
 }
 
+// TestMailboxScopedStats verifies that per-mailbox totals, unread counts and
+// tags are scoped to a single authenticated username, and in particular that
+// tags belonging to one mailbox never leak into another.
+func TestMailboxScopedStats(t *testing.T) {
+	for _, tenantID := range []string{"", "host.example.com"} {
+		tenantID = config.DBTenantID(tenantID)
+		setup(tenantID)
+
+		serviceA := "service-a"
+		serviceB := "service-b"
+
+		// 3 messages for service-a, 2 for service-b, 1 unauthenticated
+		for i := range 3 {
+			storeWithUsername(t, i, &serviceA)
+		}
+		for i := range 2 {
+			storeWithUsername(t, i, &serviceB)
+		}
+		storeWithUsername(t, 9, nil)
+
+		// tag one message in each mailbox with a tag unique to that mailbox
+		aIDs, _, err := Search("username:service-a", "", 0, 0, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := SetMessageTags(aIDs[0].ID, []string{"TagOnlyA"}); err != nil {
+			t.Fatal(err)
+		}
+
+		bIDs, _, err := Search("username:service-b", "", 0, 0, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := SetMessageTags(bIDs[0].ID, []string{"TagOnlyB"}); err != nil {
+			t.Fatal(err)
+		}
+
+		// --- totals are scoped ---
+		assertEqual(t, CountTotalForUsername(serviceA), uint64(3), "service-a total")
+		assertEqual(t, CountTotalForUsername(serviceB), uint64(2), "service-b total")
+		assertEqual(t, CountTotalForUsername("does-not-exist"), uint64(0), "unknown mailbox total")
+
+		// --- unread counts are scoped ---
+		assertEqual(t, CountUnreadForUsername(serviceA), uint64(3), "service-a unread")
+		if err := MarkRead([]string{aIDs[0].ID}); err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, CountUnreadForUsername(serviceA), uint64(2), "service-a unread after marking one read")
+		assertEqual(t, CountUnreadForUsername(serviceB), uint64(2), "service-b unread must be unaffected")
+
+		// --- tags are scoped: this is the leak the global tag list caused ---
+		aTags := GetAllTagsForUsername(serviceA)
+		assertEqual(t, len(aTags), 1, "service-a should only see its own tag")
+		assertEqual(t, aTags[0], "TagOnlyA", "service-a tag name")
+
+		bTags := GetAllTagsForUsername(serviceB)
+		assertEqual(t, len(bTags), 1, "service-b should only see its own tag")
+		assertEqual(t, bTags[0], "TagOnlyB", "service-b tag name")
+
+		// the global list still contains both, proving the scoping is what filters
+		assertEqual(t, len(GetAllTags()), 2, "global tag list should contain both tags")
+
+		assertEqual(t, len(GetAllTagsForUsername("does-not-exist")), 0, "unknown mailbox has no tags")
+
+		// --- StatsGetForUsername combines the above ---
+		stats := StatsGetForUsername(serviceA)
+		assertEqual(t, stats.Total, uint64(3), "scoped stats total")
+		assertEqual(t, stats.Unread, uint64(2), "scoped stats unread")
+		assertEqual(t, len(stats.Tags), 1, "scoped stats tags")
+		// the mailbox switcher still needs every username, not just this one
+		assertEqual(t, len(stats.Usernames), 2, "scoped stats still lists all mailboxes")
+
+		Close()
+	}
+}
+
 // TestGetAllUsernames verifies the distinct-username listing used to populate
 // the mailbox switcher.
 func TestGetAllUsernames(t *testing.T) {
