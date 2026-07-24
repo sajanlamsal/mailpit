@@ -9,6 +9,17 @@ import (
 	"github.com/axllent/mailpit/internal/tools"
 )
 
+// mailboxSearch builds the search expression that restricts results to a single
+// mailbox (ie: messages received from that authenticated username). Usernames
+// containing whitespace are quoted so they are parsed as a single search term.
+func mailboxSearch(name string) string {
+	if strings.ContainsAny(name, " \t") {
+		return `username:"` + name + `"`
+	}
+
+	return "username:" + name
+}
+
 // MessagesSummary is a summary of a list of messages
 type MessagesSummary struct {
 	// Total number of messages in mailbox
@@ -61,13 +72,28 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 
 	start, beforeTS, limit := getStartLimit(r)
 
-	messages, err := storage.List(start, beforeTS, limit)
+	// optionally restrict the listing to a single mailbox (authenticated username)
+	mailboxName := strings.TrimSpace(r.URL.Query().Get("mailbox"))
+
+	var (
+		messages []storage.MessageSummary
+		stats    storage.MailboxStats
+		err      error
+	)
+
+	if mailboxName != "" {
+		// scope both the messages and the statistics to the mailbox
+		messages, _, err = storage.Search(mailboxSearch(mailboxName), "", start, beforeTS, limit)
+		stats = storage.StatsGetForUsername(mailboxName)
+	} else {
+		messages, err = storage.List(start, beforeTS, limit)
+		stats = storage.StatsGet()
+	}
+
 	if err != nil {
 		httpError(w, err.Error())
 		return
 	}
-
-	stats := storage.StatsGet()
 
 	var res MessagesSummary
 
@@ -234,13 +260,24 @@ func Search(w http.ResponseWriter, r *http.Request) {
 
 	start, beforeTS, limit := getStartLimit(r)
 
-	messages, results, err := storage.Search(search, r.URL.Query().Get("tz"), start, beforeTS, limit)
+	// optionally restrict the search to a single mailbox (authenticated username)
+	mailboxName := strings.TrimSpace(r.URL.Query().Get("mailbox"))
+	effectiveSearch := search
+	if mailboxName != "" {
+		effectiveSearch = mailboxSearch(mailboxName) + " " + search
+	}
+
+	messages, results, err := storage.Search(effectiveSearch, r.URL.Query().Get("tz"), start, beforeTS, limit)
 	if err != nil {
 		httpError(w, err.Error())
 		return
 	}
 
 	stats := storage.StatsGet()
+	if mailboxName != "" {
+		// totals, unread count & tags are scoped to the mailbox being viewed
+		stats = storage.StatsGetForUsername(mailboxName)
+	}
 
 	var res MessagesSummary
 
@@ -253,7 +290,7 @@ func Search(w http.ResponseWriter, r *http.Request) {
 	res.Tags = stats.Tags
 	res.Usernames = stats.Usernames
 
-	unread, err := storage.SearchUnreadCount(search, r.URL.Query().Get("tz"), beforeTS)
+	unread, err := storage.SearchUnreadCount(effectiveSearch, r.URL.Query().Get("tz"), beforeTS)
 	if err != nil {
 		httpError(w, err.Error())
 		return

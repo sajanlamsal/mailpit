@@ -20,6 +20,7 @@ export default {
 			socketLastConnection: 0, // timestamp to track reconnection times & avoid reloading mailbox on short disconnections
 			socketBreaks: 0, // to track sockets that continually connect & disconnect, reset every 15s
 			pauseNotifications: false, // prevent spamming
+			statsRefreshPending: false, // debounce for scoped mailbox stat refreshes
 			version: false,
 			clientErrors: [], // errors received via websocket
 		};
@@ -60,6 +61,12 @@ export default {
 				if (response.Type === "new" && response.Data) {
 					this.eventBus.emit("new", response.Data);
 
+					// while viewing a single mailbox, messages belonging to other
+					// mailboxes must not leak into its tags, counts or notifications
+					if (mailbox.mailboxUser && response.Data.Username !== mailbox.mailboxUser) {
+						return;
+					}
+
 					for (const i in response.Data.Tags) {
 						if (
 							mailbox.tags.findIndex((e) => {
@@ -94,9 +101,15 @@ export default {
 					}, 500);
 					this.eventBus.emit("prune");
 				} else if (response.Type === "stats" && response.Data) {
-					// refresh mailbox stats
-					mailbox.total = response.Data.Total;
-					mailbox.unread = response.Data.Unread;
+					// refresh mailbox stats - the broadcast carries database-wide
+					// totals, so while viewing a single mailbox we re-fetch the
+					// counts scoped to that mailbox instead of applying these
+					if (mailbox.mailboxUser) {
+						this.refreshMailboxStats();
+					} else {
+						mailbox.total = response.Data.Total;
+						mailbox.unread = response.Data.Unread;
+					}
 
 					// detect version updated, refresh is needed
 					if (this.version !== response.Data.Version) {
@@ -165,6 +178,46 @@ export default {
 			ws.onerror = function () {
 				ws.close();
 			};
+		},
+
+		// Re-fetch the totals, unread count & tags scoped to the mailbox currently
+		// being viewed. The websocket "stats" broadcast only carries database-wide
+		// figures, which would otherwise leave the scoped counts stale whenever a
+		// message is read, deleted or received. Debounced to avoid a request per
+		// broadcast during bursts.
+		refreshMailboxStats() {
+			if (this.statsRefreshPending) {
+				return;
+			}
+
+			this.statsRefreshPending = true;
+
+			window.setTimeout(() => {
+				this.statsRefreshPending = false;
+
+				const username = mailbox.mailboxUser;
+				if (!username) {
+					return;
+				}
+
+				const uri = this.resolve(`/api/v1/messages`) + "?mailbox=" + encodeURIComponent(username) + "&limit=1";
+
+				this.get(
+					uri,
+					false,
+					(response) => {
+						// ignore if the user switched mailbox while in flight
+						if (mailbox.mailboxUser !== username) {
+							return;
+						}
+						mailbox.total = response.data.total;
+						mailbox.unread = response.data.unread;
+						mailbox.tags = response.data.tags;
+					},
+					() => {}, // ignore errors, this is a background refresh
+					true, // hide the loading indicator
+				);
+			}, 300);
 		},
 
 		socketBreakReset() {

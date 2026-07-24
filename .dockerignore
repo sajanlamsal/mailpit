@@ -1,2 +1,4 @@
 /node_modules
 /mailpit
+/smtp-auth.txt
+*.db

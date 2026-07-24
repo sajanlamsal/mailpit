@@ -37,11 +37,11 @@ export default {
 <template>
 	<template v-if="mailbox.usernames && mailbox.usernames.length">
 		<div class="mt-4 text-muted">
-			<small class="text-uppercase">Mailbox</small>
+			<small>Mailbox</small>
 		</div>
-		<div class="dropdown mt-1 mb-2">
+		<div class="list-group dropdown mt-1 mb-2">
 			<button
-				class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 d-flex justify-content-between align-items-center"
+				class="list-group-item list-group-item-action small px-2 dropdown-toggle d-flex justify-content-between align-items-center"
 				type="button"
 				data-bs-toggle="dropdown"
 				aria-expanded="false"
