@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/auth"
+	"github.com/axllent/mailpit/internal/licenses"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/pop3"
 	"github.com/axllent/mailpit/internal/prometheus"
@@ -59,9 +61,7 @@ func Listen() {
 	stats.Track()
 
 	websockets.MessageHub = websockets.NewHub()
-
-	// set allowed websocket origins from configuration
-	// websockets.SetAllowedOrigins(AccessControlAllowWSOrigins)
+	websockets.SetCheckOriginFunc(corsOriginAccessControl)
 
 	go websockets.MessageHub.Run()
 
@@ -118,10 +118,11 @@ func Listen() {
 	isReady.Store(true)
 
 	server := &http.Server{
-		Addr:         config.HTTPListen,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		Handler:      r,
+		Addr:              config.HTTPListen,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		Handler:           r,
 	}
 
 	// add temporary self-signed certificates to get deleted afterwards
@@ -205,6 +206,7 @@ func apiRoutes() *http.ServeMux {
 	}
 	r.HandleFunc("GET "+config.Webroot+"api/v1/message/{id}", middleWareFunc(apiv1.GetMessage))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/info", middleWareFunc(apiv1.AppInfo))
+	r.HandleFunc("GET "+config.Webroot+"api/licenses", middleWareFunc(licenseInfo))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/webui", middleWareFunc(apiv1.WebUIConfig))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/swagger.json", middleWareFunc(swaggerBasePath))
 
@@ -319,7 +321,7 @@ func middleWareFunc(fn http.HandlerFunc) http.HandlerFunc {
 			htmlPreviewRouteRe = regexp.MustCompile(`^` + regexp.QuoteMeta(config.Webroot) + `view/[a-zA-Z0-9]+\.html$`)
 		}
 
-		if strings.HasPrefix(r.RequestURI, config.Webroot+"api/") || htmlPreviewRouteRe.MatchString(r.RequestURI) {
+		if strings.HasPrefix(r.URL.Path, config.Webroot+"api/") || htmlPreviewRouteRe.MatchString(r.URL.Path) {
 			if allowed := corsOriginAccessControl(r); !allowed {
 				http.Error(w, "Blocked due to CORS violation", http.StatusForbidden)
 				return
@@ -391,6 +393,14 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 func apiWebsocket(w http.ResponseWriter, r *http.Request) {
 	websockets.ServeWs(websockets.MessageHub, w, r)
 	storage.BroadcastMailboxStats()
+}
+
+// licenseInfo returns structured license information for Mailpit and its third-party dependencies.
+func licenseInfo(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Add("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(licenses.All()); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
 }
 
 // Wrapper to artificially inject a basePath to the swagger.json if a webroot has been specified
