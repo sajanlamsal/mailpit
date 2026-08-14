@@ -6,7 +6,7 @@
 # Pin to the minor version in go.mod's `go` directive. `golang:alpine` floats
 # across Go minor releases, so a silent toolchain upgrade can break the build
 # with no change on your side.
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Toolchain. Changes only when this line changes, so it caches ~forever.
 # `apk upgrade` removed deliberately: it makes the same Dockerfile produce
